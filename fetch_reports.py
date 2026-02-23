@@ -82,6 +82,24 @@ def get_text(el):
         text = "".join(el.itertext()).strip()
     return re.sub(r'<[^>]+>', '', text).strip()
 
+_SKIP_TITLES = [
+    "acknowledgments", "acknowledgements", "methodology", "appendix",
+    "errata", "correction", "about this report", "about this survey",
+    "about pew research", "topline questionnaire", "survey questions",
+    "codebook", "about the data", "note on",
+]
+
+def is_supplementary(title):
+    """过滤附录、方法论、致谢等附属页面，只保留正式报告"""
+    t = title.lower().strip()
+    # 完整匹配（标题就是这个词）
+    if t in _SKIP_TITLES:
+        return True
+    # 前缀匹配（如 "Appendix A: ..."、"Appendix E: Detailed tables"）
+    if any(t.startswith(kw) for kw in ("appendix", "errata:", "correction:")):
+        return True
+    return False
+
 def get_atom_link(item):
     """从 Atom entry 提取 alternate 链接"""
     for link_el in item.findall(f"{NS_ATOM}link"):
@@ -128,6 +146,8 @@ def fetch_think_tank(name, category, url):
             pub_date = norm_date(get_text(date_el))
 
             if not title or not pub_date or pub_date < DATE_FROM or pub_date > DATE_TO:
+                continue
+            if is_supplementary(title):
                 continue
 
             articles.append({
