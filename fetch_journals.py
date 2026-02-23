@@ -354,24 +354,41 @@ def write_to_sheets(articles):
 
     rows = []
     for i, date in enumerate(sorted(dates_order)):
-        # 同一天内按领域排序
         day_articles = sorted(by_date[date], key=lambda x: x["field"])
         for a in day_articles:
             rows.append(["'" + a["date"], a["field"], a["journal"],
                          a["authors"], a["title"], a["score"], a["link"]])
-        # 不同日期之间空一行（最后一天不加）
         if i < len(dates_order) - 1:
             rows.append(["", "", "", "", "", "", ""])
 
-    values_json = json.dumps(rows, ensure_ascii=False)
-    cmd = ["gog", "sheets", "append", SHEET_ID, SHEET_RANGE,
-           "--values-json", values_json, "--insert", "INSERT_ROWS"]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode == 0:
-        print(f"✅ 成功写入 {len(articles)} 篇文章到 Google Sheets")
-        print(result.stdout.strip())
+    # GitHub Actions 用 gspread（Service Account），本地用 gog
+    sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT", "")
+    if sa_json:
+        try:
+            import gspread
+            from google.oauth2.service_account import Credentials
+            sa_info = json.loads(sa_json)
+            creds = Credentials.from_service_account_info(
+                sa_info,
+                scopes=["https://www.googleapis.com/auth/spreadsheets"]
+            )
+            gc = gspread.authorize(creds)
+            ws = gc.open_by_key(SHEET_ID).worksheet(SHEET_RANGE)
+            ws.append_rows(rows, value_input_option="USER_ENTERED",
+                           insert_data_option="INSERT_ROWS")
+            print(f"✅ 成功写入 {len(articles)} 篇文章到 Google Sheets（gspread）")
+        except Exception as e:
+            print(f"❌ gspread 写入失败: {e}")
     else:
-        print(f"❌ 写入失败: {result.stderr.strip()}")
+        values_json = json.dumps(rows, ensure_ascii=False)
+        cmd = ["gog", "sheets", "append", SHEET_ID, SHEET_RANGE,
+               "--values-json", values_json, "--insert", "INSERT_ROWS"]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            print(f"✅ 成功写入 {len(articles)} 篇文章到 Google Sheets（gog）")
+            print(result.stdout.strip())
+        else:
+            print(f"❌ 写入失败: {result.stderr.strip()}")
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 def main():

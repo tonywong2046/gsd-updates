@@ -19,24 +19,13 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install gogcli
-        run: |
-          curl -fsSL https://github.com/steipete/gogcli/releases/latest/download/gogcli_linux_amd64.tar.gz \
-            | tar -xz -C /usr/local/bin
-          chmod +x /usr/local/bin/gog
-          gog --version
-
-      - name: Restore gog credentials
-        run: |
-          mkdir -p ~/.config/gogcli
-          echo "${{ secrets.GOG_CREDENTIALS }}" | base64 -d > ~/.config/gogcli/credentials.json
-        env:
-          GOG_ACCOUNT: wangsenhu@gmail.com
+      - name: Install dependencies
+        run: pip install gspread google-auth
 
       - name: Fetch journals and write to Sheets
         run: python fetch_journals.py
         env:
-          GOG_ACCOUNT: wangsenhu@gmail.com
+          GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
           GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
