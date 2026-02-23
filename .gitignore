@@ -1,0 +1,15 @@
+# 本地状态文件
+seen_jobs.json
+
+# 调试和测试脚本（不需要上 GitHub）
+debug_*.py
+test_*.py
+verify_*.py
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 环境变量
+.env
+*.env

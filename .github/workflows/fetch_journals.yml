@@ -1,0 +1,44 @@
+name: Fetch Journals Daily
+
+on:
+  schedule:
+    # 每天新加坡时间早上 8:00 运行（UTC 0:00）
+    - cron: '0 0 * * *'
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install gogcli
+        run: |
+          curl -fsSL https://github.com/steipete/gogcli/releases/latest/download/gogcli_Linux_x86_64.tar.gz \
+            | tar -xz -C /usr/local/bin
+          chmod +x /usr/local/bin/gog
+          gog --version
+
+      - name: Restore gog credentials
+        run: |
+          mkdir -p ~/.config/gogcli
+          echo "${{ secrets.GOG_CREDENTIALS }}" | base64 -d > ~/.config/gogcli/credentials.json
+        env:
+          GOG_ACCOUNT: wangsenhu@gmail.com
+
+      - name: Fetch journals and write to Sheets
+        run: python fetch_journals.py
+        env:
+          GOG_ACCOUNT: wangsenhu@gmail.com
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
+          GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
