@@ -100,17 +100,31 @@ def is_book_review(title):
 
 # ── CrossRef 抓取 ─────────────────────────────────────────────────────────────
 def fetch_crossref(journal_name, field, issn):
+    import time
+    url = (
+        f"https://api.crossref.org/works"
+        f"?filter=issn:{issn},from-pub-date:{TARGET_DATE},until-pub-date:{TARGET_DATE}"
+        f"&rows=50&select=title,author,DOI,URL,published,published-online,type"
+        f"&mailto={MAILTO}"
+    )
+    req = Request(url, headers={"User-Agent": f"SociologyBot/1.0 (mailto:{MAILTO})"})
+    data = None
+    for attempt in range(4):
+        try:
+            with urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read())
+            break
+        except Exception as e:
+            if "429" in str(e) and attempt < 3:
+                wait = (attempt + 1) * 15
+                print(f"  ⏳ {journal_name}: 限速，{wait}秒后重试...")
+                time.sleep(wait)
+            else:
+                print(f"  ⚠️  {journal_name}: 失败 ({e})")
+                return []
+    if data is None:
+        return []
     try:
-        url = (
-            f"https://api.crossref.org/works"
-            f"?filter=issn:{issn},from-pub-date:{TARGET_DATE},until-pub-date:{TARGET_DATE}"
-            f"&rows=50&select=title,author,DOI,URL,published,published-online,type"
-            f"&mailto={MAILTO}"
-        )
-        req = Request(url, headers={"User-Agent": f"SociologyBot/1.0 (mailto:{MAILTO})"})
-        with urlopen(req, timeout=20) as resp:
-            data = json.loads(resp.read())
-
         items = data.get("message", {}).get("items", [])
         articles = []
         for item in items:
@@ -395,7 +409,7 @@ def main():
 
     all_articles = []
 
-    with ThreadPoolExecutor(max_workers=10) as ex:
+    with ThreadPoolExecutor(max_workers=3) as ex:
         futures = {ex.submit(fetch_crossref, n, f, i): n for n, f, i in JOURNALS}
         for future in as_completed(futures):
             all_articles.extend(future.result())
