@@ -2,8 +2,8 @@ name: Fetch Journals Daily
 
 on:
   schedule:
-    # 每天新加坡时间早上 8:00 运行（UTC 0:00）
-    - cron: '0 0 * * *'
+    # 每天新加坡时间午夜 00:00 运行
+    - cron: '0 16 * * *'
   workflow_dispatch:  # 允许手动触发
 
 jobs:

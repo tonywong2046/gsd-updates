@@ -22,7 +22,7 @@ GEMINI_KEYS = [k for k in [
 ] if k]
 GROQ_API_KEY       = os.environ.get("GROQ_API_KEY", "")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
-SGT = timezone(timedelta(hours=8))  # 新加坡时间 UTC+8
+SGT = timezone(timedelta(hours=8))  # 新加坡时间 (SGT)
 TARGET_DATE = (datetime.now(SGT) - timedelta(days=1)).strftime("%Y-%m-%d")
 
 # ── 国际期刊（CrossRef，按 ISSN）────────────────────────────────────────────
@@ -118,7 +118,7 @@ def fetch_crossref(journal_name, field, issn):
                 continue
 
             title_list = item.get("title", [])
-            title = title_list[0].strip() if title_list else ""
+            title = re.sub(r'<[^>]+>', '', title_list[0]).strip() if title_list else ""
             if not title or is_book_review(title):
                 continue
 
@@ -164,13 +164,13 @@ def normalize_date(date_str):
     import email.utils
     try:
         parsed = email.utils.parsedate_to_datetime(date_str)
-        return parsed.astimezone(timezone.utc).strftime("%Y-%m-%d")
+        return parsed.astimezone(SGT).strftime("%Y-%m-%d")
     except:
         pass
     try:
         cleaned = date_str.strip().replace("Z", "+00:00")
         parsed = datetime.fromisoformat(cleaned)
-        return parsed.astimezone(timezone.utc).strftime("%Y-%m-%d")
+        return parsed.astimezone(SGT).strftime("%Y-%m-%d")
     except:
         pass
     if len(date_str) >= 10 and date_str[4] == "-" and date_str[7] == "-":
@@ -226,22 +226,20 @@ def score_articles(articles):
     titles_list = "\n".join([
         f"{i+1}. [{a['journal']}] {a['title']}" for i, a in enumerate(articles)
     ])
-    prompt = f"""你是社会学领域的专家教授。请对以下学术论文逐一给出推荐指数（1-5星）和一句话理由。
+    prompt = f"""你是社会学领域的专家教授。请根据以下学术论文的题目，逐一用一句中文简介说明这篇论文大概在研究什么。
 
-评分标准：
-★★★★★ 重大理论突破或方法创新，领域里程碑
-★★★★☆ 有重要理论或实证贡献，值得精读
-★★★☆☆ 扎实研究，有一定参考价值
-★★☆☆☆ 较为常规，选读
-★☆☆☆☆ 贡献有限
+要求：
+- 只根据题目推断，不要编造内容
+- 每条简介控制在30字以内
+- 语言简洁，直接说明研究主题
 
 论文列表：
 {titles_list}
 
 请严格按以下JSON格式返回，不要加任何其他文字：
 [
-  {{"index": 1, "score": "★★★★☆ 一句话理由"}},
-  {{"index": 2, "score": "★★★☆☆ 一句话理由"}}
+  {{"index": 1, "score": "一句话中文简介"}},
+  {{"index": 2, "score": "一句话中文简介"}}
 ]"""
 
     def parse_scores(content):
@@ -256,7 +254,7 @@ def score_articles(articles):
     def apply_scores(scores):
         score_map = {s["index"]: s["score"] for s in scores}
         for i, a in enumerate(articles):
-            a["score"] = score_map.get(i + 1, "★★★☆☆ 暂无评分")
+            a["score"] = score_map.get(i + 1, "暂无简介")
 
     # 1. Gemini
     def call_gemini(api_key):
@@ -336,7 +334,7 @@ def score_articles(articles):
 
     print("  ⚠️  所有评分模型失败，使用默认评分")
     for a in articles:
-        a["score"] = "★★★☆☆ 暂无评分"
+        a["score"] = "暂无简介"
     return articles
 
 # ── 写入 Google Sheets ────────────────────────────────────────────────────────
