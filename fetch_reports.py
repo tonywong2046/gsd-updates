@@ -37,6 +37,7 @@ THINK_TANKS = [
     ("Urban Institute",              "社会政策", "https://www.urban.org/research/rss.xml"),
     ("CEPR",                         "经济政策", "https://cepr.org/rss.xml"),
     ("Our World in Data",            "全球数据", "https://ourworldindata.org/atom.xml"),
+    ("Our World in Data (Insights)", "全球数据", "https://ourworldindata.org/data-insights/atom.xml"),
     ("Council on Foreign Relations", "国际关系", "https://feeds.cfr.org/cfr/publications"),
     ("UN News",                      "国际事务", "https://www.un.org/en/rss.xml"),
     ("Aspen Institute",              "政策科技", "https://www.aspeninstitute.org/feed/"),
