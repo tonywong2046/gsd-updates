@@ -177,20 +177,20 @@ def summarize_reports(articles):
     titles_list = "\n".join([
         f"{i+1}. [{a['source']}] {a['title']}" for i, a in enumerate(articles)
     ])
-    prompt = f"""你是一位政策研究专家。以下是来自各大智库的最新报告标题，请根据标题逐一用一句中文说明这份报告大概在研究什么。
+    prompt = f"""你是一位社会科学领域的编辑，负责为面向公众的社会学公众号筛选智库报告。
 
-要求：
-- 只根据标题推断，不要编造内容
-- 每条简介控制在35字以内
-- 语言简洁，直接说明研究主题
+请对以下报告标题逐一完成两件事：
+1. 判断是否与社会科学相关（relevant）：社会政策、人口、移民、经济不平等、科技与社会、国际关系、教育、医疗体系、环境与社会等均属相关。
+   只有以下情形才标记为 false：纯临床医学操作报告（如具体药物/器械覆盖细节）、非常技术性的行政监管文件。普通医疗政策分析、公共卫生趋势等仍属相关。
+2. 若相关，用一句中文简介说明研究主题（35字以内）；若不相关，score 留空字符串。
 
 报告列表：
 {titles_list}
 
 请严格按以下JSON格式返回，不要加任何其他文字：
 [
-  {{"index": 1, "score": "一句话中文简介"}},
-  {{"index": 2, "score": "一句话中文简介"}}
+  {{"index": 1, "relevant": true,  "score": "一句话中文简介"}},
+  {{"index": 2, "relevant": false, "score": ""}}
 ]"""
 
     def parse_scores(content):
@@ -203,9 +203,11 @@ def summarize_reports(articles):
         return json.loads(content[start:end])
 
     def apply_scores(scores):
-        score_map = {s["index"]: s["score"] for s in scores}
+        score_map    = {s["index"]: s.get("score", "暂无简介") for s in scores}
+        relevant_set = {s["index"] for s in scores if s.get("relevant", True)}
         for i, a in enumerate(articles):
-            a["intro"] = score_map.get(i + 1, "暂无简介")
+            a["intro"]    = score_map.get(i + 1, "暂无简介")
+            a["relevant"] = (i + 1) in relevant_set
 
     # 1. Gemini
     def call_gemini(api_key):
@@ -229,7 +231,7 @@ def summarize_reports(articles):
             try:
                 apply_scores(call_gemini(api_key))
                 print(f"  ✅ 简介生成完成（{label}）")
-                return articles
+                return _filter_relevant(articles)
             except Exception as e:
                 if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
                     if attempt < 2:
@@ -256,7 +258,7 @@ def summarize_reports(articles):
                 result = json.loads(resp.read())
             apply_scores(parse_scores(result["choices"][0]["message"]["content"].strip()))
             print("  ✅ 简介生成完成（Groq）")
-            return articles
+            return _filter_relevant(articles)
         except Exception as e:
             print(f"  ⚠️  Groq: {e}")
 
@@ -276,17 +278,25 @@ def summarize_reports(articles):
                     result = json.loads(resp.read())
                 apply_scores(parse_scores(result["choices"][0]["message"]["content"].strip()))
                 print("  ✅ 简介生成完成（OpenRouter）")
-                return articles
+                return _filter_relevant(articles)
             except Exception as e:
                 if "429" in str(e):
                     time.sleep((attempt + 1) * 15)
                 else:
                     print(f"  ⚠️  OpenRouter: {e}"); break
 
-    print("  ⚠️  所有模型失败，使用默认简介")
+    print("  ⚠️  所有模型失败，使用默认简介（不过滤）")
     for a in articles:
-        a["intro"] = "暂无简介"
+        a["intro"]    = "暂无简介"
+        a["relevant"] = True  # 模型失败时保留所有，避免误删
     return articles
+
+def _filter_relevant(articles):
+    kept    = [a for a in articles if a.get("relevant", True)]
+    dropped = len(articles) - len(kept)
+    if dropped:
+        print(f"  🔍 过滤不相关报告 {dropped} 篇，保留 {len(kept)} 篇")
+    return kept
 
 # ── 写入 Google Sheets ────────────────────────────────────────────────────────
 def write_to_sheets(articles):
