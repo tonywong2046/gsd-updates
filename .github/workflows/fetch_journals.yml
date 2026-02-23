@@ -21,7 +21,7 @@ jobs:
 
       - name: Install gogcli
         run: |
-          curl -fsSL https://github.com/steipete/gogcli/releases/latest/download/gogcli_Linux_x86_64.tar.gz \
+          curl -fsSL https://github.com/steipete/gogcli/releases/latest/download/gogcli_linux_amd64.tar.gz \
             | tar -xz -C /usr/local/bin
           chmod +x /usr/local/bin/gog
           gog --version
