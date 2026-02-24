@@ -2,11 +2,10 @@
 """
 Sociology Journal Fetcher — CrossRef API Edition
 - 国际期刊：CrossRef API（按 ISSN + 日期查询，无需 RSS URL）
-- 中文期刊：保留 CNKI RSS
 - 过滤书评 → Gemini/Groq 评分 → 写入 Google Sheets
 """
 
-import subprocess, json, os, re, xml.etree.ElementTree as ET
+import subprocess, json, os, re
 from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.request import urlopen, Request
@@ -71,14 +70,6 @@ JOURNALS = [
     ("Demographic Research",            "人口学", "1435-9871"),
 ]
 
-# ── 中文期刊（CNKI RSS，CrossRef 未收录）────────────────────────────────────
-CHINESE_JOURNALS = [
-    ("社会学研究",   "中文核心期刊", "https://rss.cnki.net/knavi/rss/SHXJ?pcode=CJFD"),
-    ("人口研究",     "中文核心期刊", "https://rss.cnki.net/knavi/rss/RKYZ?pcode=CJFD"),
-    ("中国社会科学", "中文核心期刊", "https://rss.cnki.net/knavi/rss/ZSHK?pcode=CJFD"),
-    ("社会学评论",   "中文核心期刊", "https://rss.cnki.net/knavi/rss/SHXP?pcode=CJFD"),
-    ("中国人口科学", "中文核心期刊", "https://rss.cnki.net/knavi/rss/ZKRK?pcode=CJFD"),
-]
 
 # ── 书评过滤 ─────────────────────────────────────────────────────────────────
 BOOK_REVIEW_KEYWORDS = [
@@ -171,65 +162,6 @@ def fetch_crossref(journal_name, field, issn):
         print(f"  ⚠️  {journal_name}: 失败 ({e})")
         return []
 
-# ── RSS 抓取（中文期刊）──────────────────────────────────────────────────────
-def normalize_date(date_str):
-    if not date_str:
-        return ""
-    import email.utils
-    try:
-        parsed = email.utils.parsedate_to_datetime(date_str)
-        return parsed.astimezone(SGT).strftime("%Y-%m-%d")
-    except:
-        pass
-    try:
-        cleaned = date_str.strip().replace("Z", "+00:00")
-        parsed = datetime.fromisoformat(cleaned)
-        return parsed.astimezone(SGT).strftime("%Y-%m-%d")
-    except:
-        pass
-    if len(date_str) >= 10 and date_str[4] == "-" and date_str[7] == "-":
-        return date_str[:10]
-    return ""
-
-def fetch_rss(journal_name, field, url):
-    try:
-        req = Request(url, headers={
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-            "Accept": "application/rss+xml, application/xml, text/xml, */*",
-        })
-        with urlopen(req, timeout=15) as resp:
-            content = resp.read()
-        content_str = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '',
-                             content.decode("utf-8", errors="replace"))
-        root = ET.fromstring(content_str.encode("utf-8"))
-        ns = {"dc": "http://purl.org/dc/elements/1.1/",
-              "prism": "http://prismstandard.org/namespaces/basic/2.0/"}
-        articles = []
-        for item in root.iter("item"):
-            title_el = item.find("title")
-            title = title_el.text.strip() if title_el is not None and title_el.text else ""
-            if is_book_review(title):
-                continue
-            link_el = item.find("link")
-            link = link_el.text.strip() if link_el is not None and link_el.text else ""
-            authors = [c.text.strip() for c in item.findall("dc:creator", ns) if c.text]
-            pub_date = ""
-            for tag in ["pubDate", "dc:date", "prism:coverDate"]:
-                el = item.find(tag, ns) if ":" in tag else item.find(tag)
-                if el is not None and el.text:
-                    pub_date = el.text.strip()
-                    break
-            if normalize_date(pub_date) == TARGET_DATE:
-                articles.append({
-                    "journal": journal_name, "field": field, "title": title,
-                    "authors": ", ".join(authors) or "N/A",
-                    "date": normalize_date(pub_date), "link": link,
-                })
-        print(f"  ✅ {journal_name}: {len(articles)} 篇")
-        return articles
-    except Exception as e:
-        print(f"  ⚠️  {journal_name}: 失败 ({e})")
-        return []
 
 # ── 评分 ─────────────────────────────────────────────────────────────────────
 def score_articles(articles):
@@ -405,17 +337,12 @@ def write_to_sheets(articles):
 # ── Main ─────────────────────────────────────────────────────────────────────
 def main():
     print(f"🔍 抓取日期: {TARGET_DATE}")
-    print(f"📚 {len(JOURNALS)} 个国际期刊（CrossRef）+ {len(CHINESE_JOURNALS)} 个中文期刊（RSS）\n")
+    print(f"📚 {len(JOURNALS)} 个国际期刊（CrossRef）\n")
 
     all_articles = []
 
     with ThreadPoolExecutor(max_workers=3) as ex:
         futures = {ex.submit(fetch_crossref, n, f, i): n for n, f, i in JOURNALS}
-        for future in as_completed(futures):
-            all_articles.extend(future.result())
-
-    with ThreadPoolExecutor(max_workers=5) as ex:
-        futures = {ex.submit(fetch_rss, n, f, u): n for n, f, u in CHINESE_JOURNALS}
         for future in as_completed(futures):
             all_articles.extend(future.result())
 
