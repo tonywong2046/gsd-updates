@@ -32,10 +32,14 @@ jobs:
           echo "IMAGE_TAG_SHA=${{ env.OCI_REGION }}.ocir.io/${{ env.OCI_TENANCY_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ github.sha }}" >> $GITHUB_ENV
 
       - name: Login to OCIR
+        env:
+          OCIR_TOKEN: ${{ secrets.OCI_OCIR_AUTH_TOKEN }}
+          OCIR_USER: ${{ env.OCI_TENANCY_NAMESPACE }}/${{ secrets.OCI_USERNAME }}
         run: |
-          echo "${{ secrets.OCI_OCIR_AUTH_TOKEN }}" | docker login \
+          # 使用 env var 避免特殊字符（> < { # 等）被 shell 误解析
+          printf '%s' "$OCIR_TOKEN" | docker login \
             ${{ env.OCI_REGION }}.ocir.io \
-            --username "${{ env.OCI_TENANCY_NAMESPACE }}/${{ secrets.OCI_USERNAME }}" \
+            --username "$OCIR_USER" \
             --password-stdin
 
       - name: Build Docker image
