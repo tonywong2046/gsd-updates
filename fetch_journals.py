@@ -50,7 +50,7 @@ JOURNALS = [
     ("Network Science",  "社会网络", "2050-1242"),
     # 社会分层与流动
     ("Research in Social Stratification and Mobility", "社会分层与流动", "0276-5624"),
-    ("Social Science Research",                        "社会分层与流动", "0049-089X"),
+    ("Social Science Research",                         "社会分层与流动", "0049-089X"),
     # 医学社会学
     ("Social Science & Medicine",           "医学社会学", "0277-9536"),
     ("Journal of Health and Social Behavior","医学社会学", "0022-1465"),
@@ -108,10 +108,10 @@ def fetch_crossref(journal_name, field, issn):
         except Exception as e:
             if "429" in str(e) and attempt < 3:
                 wait = (attempt + 1) * 15
-                print(f"  ⏳ {journal_name}: 限速，{wait}秒后重试...")
+                print(f"   ⏳ {journal_name}: 限速，{wait}秒后重试...")
                 time.sleep(wait)
             else:
-                print(f"  ⚠️  {journal_name}: 失败 ({e})")
+                print(f"   ⚠️  {journal_name}: 失败 ({e})")
                 return []
     if data is None:
         return []
@@ -156,10 +156,10 @@ def fetch_crossref(journal_name, field, issn):
                 "link":    link,
             })
 
-        print(f"  ✅ {journal_name}: {len(articles)} 篇")
+        print(f"   ✅ {journal_name}: {len(articles)} 篇")
         return articles
     except Exception as e:
-        print(f"  ⚠️  {journal_name}: 失败 ({e})")
+        print(f"   ⚠️  {journal_name}: 失败 ({e})")
         return []
 
 
@@ -206,10 +206,10 @@ def score_articles(articles):
     def call_gemini(api_key):
         payload = json.dumps({
             "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"maxOutputTokens": 2000, "thinkingConfig": {"thinkingBudget": 0}},
+            "generationConfig": {"maxOutputTokens": 2000},
         }).encode()
         req = Request(
-            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}",
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}",
             data=payload, headers={"Content-Type": "application/json"},
         )
         with urlopen(req, timeout=60) as resp:
@@ -223,17 +223,17 @@ def score_articles(articles):
         for attempt in range(3):
             try:
                 apply_scores(call_gemini(api_key))
-                print(f"  ✅ 评分完成（{label}）")
+                print(f"   ✅ 评分完成（{label}）")
                 return articles
             except Exception as e:
                 if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
                     if attempt < 2:
                         time.sleep((attempt + 1) * 10)
-                        print(f"  ⏳ {label} 限速，重试中...")
+                        print(f"   ⏳ {label} 限速，重试中...")
                     else:
-                        print(f"  ⏳ {label} 持续限速，换下一个 key")
+                        print(f"   ⏳ {label} 持续限速，换下一个 key")
                 else:
-                    print(f"  ⚠️  {label}: {e}，换下一个 key")
+                    print(f"   ⚠️  {label}: {e}，换下一个 key")
                     break
 
     # 2. Groq
@@ -250,10 +250,10 @@ def score_articles(articles):
             with urlopen(req, timeout=30) as resp:
                 result = json.loads(resp.read())
             apply_scores(parse_scores(result["choices"][0]["message"]["content"].strip()))
-            print("  ✅ 评分完成（Groq）")
+            print("   ✅ 评分完成（Groq）")
             return articles
         except Exception as e:
-            print(f"  ⚠️  Groq: {e}")
+            print(f"   ⚠️  Groq: {e}")
 
     # 3. OpenRouter
     if OPENROUTER_API_KEY:
@@ -270,15 +270,15 @@ def score_articles(articles):
                 with urlopen(req, timeout=30) as resp:
                     result = json.loads(resp.read())
                 apply_scores(parse_scores(result["choices"][0]["message"]["content"].strip()))
-                print("  ✅ 评分完成（OpenRouter）")
+                print("   ✅ 评分完成（OpenRouter）")
                 return articles
             except Exception as e:
                 if "429" in str(e):
                     time.sleep((attempt + 1) * 15)
                 else:
-                    print(f"  ⚠️  OpenRouter: {e}"); break
+                    print(f"   ⚠️  OpenRouter: {e}"); break
 
-    print("  ⚠️  所有评分模型失败，使用默认评分")
+    print("   ⚠️  所有评分模型失败，使用默认评分")
     for a in articles:
         a["score"] = "暂无简介"
     return articles
@@ -288,7 +288,6 @@ def write_to_sheets(articles):
     if not articles:
         print("没有新文章。"); return
 
-    # 按日期分组，同一天内按领域排序，不同日期之间空一行
     from collections import defaultdict
     dates_order, by_date = [], defaultdict(list)
     for a in articles:
@@ -305,32 +304,37 @@ def write_to_sheets(articles):
         if i < len(dates_order) - 1:
             rows.append(["", "", "", "", "", "", ""])
 
-    # GitHub Actions 用 gspread（Service Account），本地用 gog
+    # 环境检测：如果有 GOOGLE_SERVICE_ACCOUNT，说明在 GitHub/云端运行
     sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT", "")
     if sa_json:
         try:
             import gspread, base64
             from google.oauth2.service_account import Credentials
-            sa_info = json.loads(base64.b64decode(sa_json))
+            # 兼容 Base64 编码或原始 JSON 字符串
+            try:
+                sa_info = json.loads(base64.b64decode(sa_json))
+            except:
+                sa_info = json.loads(sa_json)
+                
             creds = Credentials.from_service_account_info(
                 sa_info,
                 scopes=["https://www.googleapis.com/auth/spreadsheets"]
             )
             gc = gspread.authorize(creds)
             ws = gc.open_by_key(SHEET_ID).worksheet(SHEET_RANGE)
-            ws.append_rows(rows, value_input_option="USER_ENTERED",
-                           insert_data_option="INSERT_ROWS")
-            print(f"✅ 成功写入 {len(articles)} 篇文章到 Google Sheets（gspread）")
+            # 新数据置顶：在第 2 行（标题行之后）插入，确保最新数据在最上方
+            ws.insert_rows(rows, row=2, value_input_option="USER_ENTERED")
+            print(f"✅ 成功写入 {len(articles)} 篇文章到 Google Sheets（已置顶）")
         except Exception as e:
             print(f"❌ gspread 写入失败: {e}")
     else:
+        # 本地模式使用 gog 命令行工具
         values_json = json.dumps(rows, ensure_ascii=False)
         cmd = ["gog", "sheets", "append", SHEET_ID, SHEET_RANGE,
                "--values-json", values_json, "--insert", "INSERT_ROWS"]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode == 0:
             print(f"✅ 成功写入 {len(articles)} 篇文章到 Google Sheets（gog）")
-            print(result.stdout.strip())
         else:
             print(f"❌ 写入失败: {result.stderr.strip()}")
 

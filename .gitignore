@@ -13,3 +13,17 @@ __pycache__/
 # 环境变量
 .env
 *.env
+
+# 服务账号 JSON 私钥（含敏感信息，绝不上传 GitHub）
+gpha-*.json
+service-account*.json
+*-service-account.json
+
+# RTF 备注文件（本地参考，不需要上传）
+*.rtf
+
+# macOS
+.DS_Store
+
+# 旧脚本备份目录
+old scripts/
