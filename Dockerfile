@@ -1,13 +1,8 @@
-FROM python:3.11-slim-buster
+FROM python:3.11-slim
 
 WORKDIR /function
 
-# 安装系统基础依赖
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-# 复制并安装依赖
+# 直接安装依赖（fdk/gspread/google-auth 均为纯 Python，无需 build-essential）
 COPY requirements.txt /function/
 RUN pip3 install --no-cache-dir -r requirements.txt
 
