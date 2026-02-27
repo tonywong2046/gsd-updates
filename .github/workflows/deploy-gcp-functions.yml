@@ -34,34 +34,33 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up gcloud CLI
-        uses: google-github-actions/setup-gcloud@v2
-
-      - name: Authenticate to GCP
+      # 提前解码 key 并设置 GOOGLE_APPLICATION_CREDENTIALS，
+      # 让 setup-gcloud@v2 不报 "not authenticated" Warning
+      - name: Prepare GCP credentials
         env:
           GOOGLE_SA: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
         run: |
-          # 解码 base64（如果是 base64 编码）或直接使用原始 JSON
           echo "$GOOGLE_SA" | base64 -d > /tmp/gcp-key.json 2>/dev/null \
             && python3 -c "import json; json.load(open('/tmp/gcp-key.json'))" 2>/dev/null \
             || echo "$GOOGLE_SA" > /tmp/gcp-key.json
+          echo "GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp-key.json" >> $GITHUB_ENV
 
-          # 打印 key 所属的 service account email（用于验证）
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Activate GCP service account
+        run: |
           SA_EMAIL=$(python3 -c "import json; print(json.load(open('/tmp/gcp-key.json')).get('client_email','UNKNOWN'))")
           echo "🔑 Key belongs to SA: $SA_EMAIL"
-
-          # 激活 service account
           gcloud auth activate-service-account --key-file=/tmp/gcp-key.json
           gcloud config set account "$SA_EMAIL"
           gcloud config set project ${{ env.PROJECT_ID }}
-
-          # 为 ADC 设置凭证路径
-          echo "GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp-key.json" >> $GITHUB_ENV
-
           echo "✅ 认证完成"
           gcloud auth list
           echo "Active account: $(gcloud config get-value account)"
           echo "Project: $(gcloud config get-value project)"
+
+      # ── 部署三个函数 ──────────────────────────────────────────────────────
 
       - name: Deploy fetch_jobs
         run: |
@@ -111,6 +110,8 @@ jobs:
             --set-env-vars="GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }},GEMINI_API_KEY_2=${{ secrets.GEMINI_API_KEY_2 }},GEMINI_API_KEY_3=${{ secrets.GEMINI_API_KEY_3 }},GROQ_API_KEY=${{ secrets.GROQ_API_KEY }},OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}"
           echo "✅ fetch-reports 部署完成"
 
+      # ── 打印结果 ──────────────────────────────────────────────────────────
+
       - name: Print function URLs
         run: |
           echo "## 🚀 部署结果" >> $GITHUB_STEP_SUMMARY
@@ -120,4 +121,4 @@ jobs:
             echo "- **$func**: \`$URL\`" >> $GITHUB_STEP_SUMMARY
           done
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "> 函数已设为 --no-allow-unauthenticated，通过 Cloud Scheduler OIDC token 调用。" >> $GITHUB_STEP_SUMMARY
+          echo "> 函数已设为 --no-allow-unauthenticated，需通过 Cloud Scheduler 的 OIDC token 调用。" >> $GITHUB_STEP_SUMMARY

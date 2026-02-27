@@ -3,7 +3,7 @@
 Think Tank Report Fetcher — RSS Edition
 每天抓取主要智库最新报告 → 写入 Google Sheets「智库报告」标签
 """
-import json, os, re, time, base64
+import json, os, re, time, base64, functools
 from datetime import datetime, timedelta, timezone
 from urllib.request import urlopen, Request
 from urllib.error import HTTPError, URLError
@@ -28,6 +28,54 @@ GEMINI_KEYS = [k for k in [
 ] if k]
 GROQ_API_KEY       = os.environ.get("GROQ_API_KEY", "")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+
+# ── Gemini 动态模型选择 ───────────────────────────────────────────────────────
+GEMINI_PREFERRED = [
+    "gemini-2.5-flash",       # 首选：最新最优 flash
+    "gemini-2.0-flash",       # 备选：上一代，极稳定
+    "gemini-2.0-flash-lite",  # 再备：更便宜
+    "gemini-1.5-flash",       # 兜底：老但极可靠
+    "gemini-1.5-flash-8b",    # 最终兜底：最便宜
+]
+_EXCLUDE_KEYWORDS = ("pro", "preview", "exp", "thinking")
+
+def _model_version_key(name):
+    m = re.search(r'gemini-(\d+)[.\-](\d+)', name)
+    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+
+@functools.lru_cache(maxsize=8)
+def _list_gemini_models(api_key):
+    """列出指定 API key 可用的 Gemini 模型（结果缓存，每次运行只调用一次）"""
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=api_key)
+        return frozenset(
+            m.name.removeprefix("models/")
+            for m in genai.list_models()
+            if "generateContent" in m.supported_generation_methods
+        )
+    except Exception as e:
+        print(f"  ⚠️ 无法列出 Gemini 模型: {e}")
+        return frozenset()
+
+def get_best_gemini_model(api_key):
+    """按优先级选择最佳可用 flash 模型，排除 pro/preview/exp/thinking"""
+    available = _list_gemini_models(api_key)
+    if not available:
+        return "gemini-2.0-flash"  # 列表失败时的默认值
+    for model in GEMINI_PREFERRED:
+        if model in available:
+            return model
+    # 所有优先模型均不可用：自动寻找版本最高的 flash 模型
+    candidates = [
+        m for m in available
+        if "flash" in m and not any(kw in m for kw in _EXCLUDE_KEYWORDS)
+    ]
+    if candidates:
+        chosen = max(candidates, key=_model_version_key)
+        print(f"  📌 自动降级至: {chosen}")
+        return chosen
+    return "gemini-1.5-flash"
 
 # ── Think Tank RSS Feeds ──────────────────────────────────────────────────────
 # (机构名, 分类标签, RSS URL)
@@ -202,32 +250,85 @@ def summarize_reports(articles):
             a["intro"]    = score_map.get(i + 1, "暂无简介")
             a["relevant"] = (i + 1) in relevant_set
 
-    # 1. Gemini
+    # 1. Gemini（动态模型选择 + 完整 retry）
     def call_gemini(api_key):
+        model = get_best_gemini_model(api_key)
+        print(f"  🤖 使用模型: {model}")
         payload = json.dumps({
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"maxOutputTokens": 2000}
         }).encode()
-        # 注意：此处建议确认 gemini-2.0-flash 或 1.5-flash
-        model_name = "gemini-1.5-flash" 
         req = Request(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}",
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
             data=payload, headers={"Content-Type": "application/json"},
         )
         with urlopen(req, timeout=60) as resp:
             result = json.loads(resp.read())
-        text = result["candidates"][0]["content"]["parts"][0]["text"].strip()
+        parts = result["candidates"][0]["content"]["parts"]
+        text = next((p["text"] for p in reversed(parts) if "text" in p), "").strip()
         return parse_scores(text)
 
-    for api_key in GEMINI_KEYS:
+    for key_idx, api_key in enumerate(GEMINI_KEYS):
+        label = f"Gemini key{key_idx+1}"
+        for attempt in range(3):
+            try:
+                apply_scores(call_gemini(api_key))
+                print(f"  ✅ 简介生成完成（{label}）")
+                return _filter_relevant(articles)
+            except Exception as e:
+                if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                    if attempt < 2:
+                        time.sleep((attempt + 1) * 10)
+                        print(f"  ⏳ {label} 限速，重试中...")
+                    else:
+                        print(f"  ⏳ {label} 持续限速，换下一个 key")
+                else:
+                    print(f"  ⚠️  {label}: {e}，换下一个 key")
+                    break
+
+    # 2. Groq
+    if GROQ_API_KEY:
         try:
-            apply_scores(call_gemini(api_key))
-            print("  ✅ 简介生成完成（Gemini）")
+            payload = json.dumps({
+                "model": "llama-3.3-70b-versatile",
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 1000,
+            }).encode()
+            req = Request("https://api.groq.com/openai/v1/chat/completions", data=payload,
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}",
+                         "Content-Type": "application/json", "User-Agent": "curl/7.88.1"})
+            with urlopen(req, timeout=30) as resp:
+                result = json.loads(resp.read())
+            apply_scores(parse_scores(result["choices"][0]["message"]["content"].strip()))
+            print("  ✅ 简介生成完成（Groq）")
             return _filter_relevant(articles)
         except Exception as e:
-            print(f"  ⚠️ Gemini 失败: {e}")
+            print(f"  ⚠️  Groq: {e}")
 
-    # 模型降级逻辑省略（同原版）...
+    # 3. OpenRouter
+    if OPENROUTER_API_KEY:
+        for attempt in range(3):
+            try:
+                payload = json.dumps({
+                    "model": "meta-llama/llama-3.3-70b-instruct:free",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 1000,
+                }).encode()
+                req = Request("https://openrouter.ai/api/v1/chat/completions", data=payload,
+                    headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                             "Content-Type": "application/json", "HTTP-Referer": "https://openclaw.ai"})
+                with urlopen(req, timeout=30) as resp:
+                    result = json.loads(resp.read())
+                apply_scores(parse_scores(result["choices"][0]["message"]["content"].strip()))
+                print("  ✅ 简介生成完成（OpenRouter）")
+                return _filter_relevant(articles)
+            except Exception as e:
+                if "429" in str(e):
+                    time.sleep((attempt + 1) * 15)
+                else:
+                    print(f"  ⚠️  OpenRouter: {e}"); break
+
+    print("  ⚠️  所有模型失败，使用默认值")
     for a in articles:
         a["intro"] = a.get("intro", "暂无简介")
         a["relevant"] = a.get("relevant", True)
@@ -252,21 +353,20 @@ def write_to_sheets(articles):
         from google.oauth2.service_account import Credentials
 
         if sa_json:
-            # 本地/GitHub Actions：使用 JSON key（Base64 或原始 JSON）
             sa_info = json.loads(base64.b64decode(sa_json))
             creds = Credentials.from_service_account_info(
                 sa_info, scopes=["https://www.googleapis.com/auth/spreadsheets"]
             )
         else:
-            # GCP Cloud Run：使用 Application Default Credentials
             import google.auth
             creds, _ = google.auth.default(
                 scopes=["https://www.googleapis.com/auth/spreadsheets"])
 
         gc = gspread.authorize(creds)
         ws = gc.open_by_key(SHEET_ID).worksheet(SHEET_TAB)
-        # 新数据置顶：在第 2 行（标题行之后）插入，确保最新数据在最上方
-        ws.insert_rows(rows, row=2, value_input_option="USER_ENTERED")
+        # 新数据置顶：先插入空行分隔，再插入数据，视觉上区分每次抓取批次
+        separator = [["" for _ in rows[0]]]
+        ws.insert_rows(separator + rows, row=2, value_input_option="USER_ENTERED")
         print(f"✅ 成功写入 {len(articles)} 篇报告（已置顶）")
     except Exception as e:
         print(f"❌ gspread 写入失败: {e}")
