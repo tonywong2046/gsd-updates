@@ -45,14 +45,17 @@ def _model_version_key(name):
 
 @functools.lru_cache(maxsize=8)
 def _list_gemini_models(api_key):
-    """列出指定 API key 可用的 Gemini 模型（结果缓存，每次运行只调用一次）"""
+    """列出指定 API key 可用的 Gemini 模型（纯 REST，不依赖 SDK，结果缓存）"""
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
+        from urllib.request import urlopen as _urlopen
+        import json as _json
+        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}&pageSize=200"
+        with _urlopen(url, timeout=10) as r:
+            data = _json.loads(r.read())
         return frozenset(
-            m.name.removeprefix("models/")
-            for m in genai.list_models()
-            if "generateContent" in m.supported_generation_methods
+            m["name"].removeprefix("models/")
+            for m in data.get("models", [])
+            if "generateContent" in m.get("supportedGenerationMethods", [])
         )
     except Exception as e:
         print(f"  ⚠️ 无法列出 Gemini 模型: {e}")
@@ -250,7 +253,26 @@ def summarize_reports(articles):
             a["intro"]    = score_map.get(i + 1, "暂无简介")
             a["relevant"] = (i + 1) in relevant_set
 
-    # 1. Gemini（动态模型选择 + 完整 retry）
+    # 1. Groq（默认，最稳定）
+    if GROQ_API_KEY:
+        try:
+            payload = json.dumps({
+                "model": "llama-3.3-70b-versatile",
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 1000,
+            }).encode()
+            req = Request("https://api.groq.com/openai/v1/chat/completions", data=payload,
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}",
+                         "Content-Type": "application/json", "User-Agent": "curl/7.88.1"})
+            with urlopen(req, timeout=30) as resp:
+                result = json.loads(resp.read())
+            apply_scores(parse_scores(result["choices"][0]["message"]["content"].strip()))
+            print("  ✅ 简介生成完成（Groq）")
+            return _filter_relevant(articles)
+        except Exception as e:
+            print(f"  ⚠️  Groq: {e}，尝试 Gemini...")
+
+    # 2. Gemini（备用）
     def call_gemini(api_key):
         model = get_best_gemini_model(api_key)
         print(f"  🤖 使用模型: {model}")
@@ -285,25 +307,6 @@ def summarize_reports(articles):
                 else:
                     print(f"  ⚠️  {label}: {e}，换下一个 key")
                     break
-
-    # 2. Groq
-    if GROQ_API_KEY:
-        try:
-            payload = json.dumps({
-                "model": "llama-3.3-70b-versatile",
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 1000,
-            }).encode()
-            req = Request("https://api.groq.com/openai/v1/chat/completions", data=payload,
-                headers={"Authorization": f"Bearer {GROQ_API_KEY}",
-                         "Content-Type": "application/json", "User-Agent": "curl/7.88.1"})
-            with urlopen(req, timeout=30) as resp:
-                result = json.loads(resp.read())
-            apply_scores(parse_scores(result["choices"][0]["message"]["content"].strip()))
-            print("  ✅ 简介生成完成（Groq）")
-            return _filter_relevant(articles)
-        except Exception as e:
-            print(f"  ⚠️  Groq: {e}")
 
     # 3. OpenRouter
     if OPENROUTER_API_KEY:
@@ -366,9 +369,11 @@ def write_to_sheets(articles):
 
         gc = gspread.authorize(creds)
         ws = gc.open_by_key(SHEET_ID).worksheet(SHEET_TAB)
-        # 新数据置顶：先插入空行分隔，再插入数据，视觉上区分每次抓取批次
+        # 时间戳行 + 数据 + 空行分隔（置顶）
+        ts = datetime.now(SGT).strftime("%Y/%m/%d, %H:%M") + "完成更新"
+        timestamp_row = [[ts] + [""] * (len(rows[0]) - 1)]
         separator = [[""] * len(rows[0])]
-        ws.insert_rows(separator + rows, row=2, value_input_option="USER_ENTERED")
+        ws.insert_rows(timestamp_row + rows + separator, row=2, value_input_option="USER_ENTERED")
         print(f"✅ 成功写入 {len(articles)} 篇报告（已置顶）")
     except Exception as e:
         print(f"❌ gspread 写入失败: {e}")
