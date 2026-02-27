@@ -257,9 +257,9 @@ def write_to_sheets(jobs_dict):
                 scopes=['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive'])
         gc = gspread.authorize(creds)
         ws = gc.open_by_key(SHEET_ID).worksheet(SHEET_RANGE)
-        # 新数据置顶：先插入空行分隔，再插入数据，视觉上区分每次抓取批次
-        separator = [["" for _ in rows[0]]]
-        ws.insert_rows(separator + rows, row=2, value_input_option="USER_ENTERED")
+        # 新数据置顶：空行追加在本批数据后面，与旧数据形成视觉分隔
+        separator = [[""] * len(rows[0])]
+        ws.insert_rows(rows + separator, row=2, value_input_option="USER_ENTERED")
         print(f"✓ 成功写入 {len(rows)} 条（已置顶）")
         return True
     except Exception as e:
