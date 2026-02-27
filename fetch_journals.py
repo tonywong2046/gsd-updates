@@ -40,14 +40,15 @@ def _model_version_key(name):
 
 @functools.lru_cache(maxsize=8)
 def _list_gemini_models(api_key):
-    """列出指定 API key 可用的 Gemini 模型（结果缓存，每次运行只调用一次）"""
+    """列出指定 API key 可用的 Gemini 模型（纯 REST，不依赖 SDK，结果缓存）"""
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
+        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}&pageSize=200"
+        with urlopen(url, timeout=10) as r:
+            data = json.loads(r.read())
         return frozenset(
-            m.name.removeprefix("models/")
-            for m in genai.list_models()
-            if "generateContent" in m.supported_generation_methods
+            m["name"].removeprefix("models/")
+            for m in data.get("models", [])
+            if "generateContent" in m.get("supportedGenerationMethods", [])
         )
     except Exception as e:
         print(f"   ⚠️ 无法列出 Gemini 模型: {e}")
@@ -354,12 +355,14 @@ def write_to_sheets(articles):
         if i < len(dates_order) - 1:
             rows.append(["", "", "", "", "", "", ""])
 
+    # 环境检测：如果有 GOOGLE_SERVICE_ACCOUNT，说明在 GitHub/云端运行
     sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT", "")
     try:
         import gspread, base64
         from google.oauth2.service_account import Credentials
 
         if sa_json:
+            # 本地/GitHub Actions：使用 JSON key（Base64 或原始 JSON）
             try:
                 sa_info = json.loads(base64.b64decode(sa_json))
             except:
@@ -369,16 +372,16 @@ def write_to_sheets(articles):
                 scopes=["https://www.googleapis.com/auth/spreadsheets"]
             )
         else:
+            # GCP Cloud Run：使用 Application Default Credentials
             import google.auth
             creds, _ = google.auth.default(
                 scopes=["https://www.googleapis.com/auth/spreadsheets"])
 
         gc = gspread.authorize(creds)
         ws = gc.open_by_key(SHEET_ID).worksheet(SHEET_RANGE)
-        # 新数据置顶：先插入空行分隔，再插入数据，视觉上区分每次抓取批次
-        separator = [[""]] * len(rows[0]) if rows else [[""]]
-        separator = [["" for _ in rows[0]]]
-        ws.insert_rows(separator + rows, row=2, value_input_option="USER_ENTERED")
+        # 新数据置顶：空行追加在本批数据后面，视觉上区分每次抓取批次
+        separator = [["" ] * len(rows[0])]
+        ws.insert_rows(rows + separator, row=2, value_input_option="USER_ENTERED")
         print(f"✅ 成功写入 {len(articles)} 篇文章到 Google Sheets（已置顶）")
     except Exception as e:
         print(f"❌ gspread 写入失败: {e}")

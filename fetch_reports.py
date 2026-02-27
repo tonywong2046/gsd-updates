@@ -45,14 +45,15 @@ def _model_version_key(name):
 
 @functools.lru_cache(maxsize=8)
 def _list_gemini_models(api_key):
-    """列出指定 API key 可用的 Gemini 模型（结果缓存，每次运行只调用一次）"""
+    """列出指定 API key 可用的 Gemini 模型（纯 REST，不依赖 SDK，结果缓存）"""
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
+        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}&pageSize=200"
+        with urlopen(url, timeout=10) as r:
+            data = json.loads(r.read())
         return frozenset(
-            m.name.removeprefix("models/")
-            for m in genai.list_models()
-            if "generateContent" in m.supported_generation_methods
+            m["name"].removeprefix("models/")
+            for m in data.get("models", [])
+            if "generateContent" in m.get("supportedGenerationMethods", [])
         )
     except Exception as e:
         print(f"  ⚠️ 无法列出 Gemini 模型: {e}")
@@ -78,8 +79,6 @@ def get_best_gemini_model(api_key):
     return "gemini-1.5-flash"
 
 # ── Think Tank RSS Feeds ──────────────────────────────────────────────────────
-# (机构名, 分类标签, RSS URL)
-# 已移除 KFF 和 Urban Institute
 THINK_TANKS = [
     ("Pew Research Center",          "社会调研", "https://www.pewresearch.org/feed/"),
     ("CEPR",                         "经济政策", "https://cepr.org/rss.xml"),
@@ -101,7 +100,6 @@ NS_DC   = "{http://purl.org/dc/elements/1.1/}"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def norm_date(date_str):
-    """解析各种日期格式 → YYYY-MM-DD（新加坡时间）"""
     if not date_str:
         return ""
     import email.utils
@@ -122,7 +120,6 @@ def norm_date(date_str):
     return ""
 
 def get_text(el):
-    """安全提取 XML 元素文本"""
     if el is None:
         return ""
     text = (el.text or "").strip()
@@ -138,7 +135,6 @@ _SKIP_TITLES = [
 ]
 
 def is_supplementary(title):
-    """过滤附录等正式报告之外的页面"""
     t = title.lower().strip()
     if t in _SKIP_TITLES:
         return True
@@ -147,7 +143,6 @@ def is_supplementary(title):
     return False
 
 def get_atom_link(item):
-    """从 Atom entry 提取链接"""
     for link_el in item.findall(f"{NS_ATOM}link"):
         rel  = link_el.get("rel", "alternate")
         href = link_el.get("href", "")
@@ -364,9 +359,9 @@ def write_to_sheets(articles):
 
         gc = gspread.authorize(creds)
         ws = gc.open_by_key(SHEET_ID).worksheet(SHEET_TAB)
-        # 新数据置顶：先插入空行分隔，再插入数据，视觉上区分每次抓取批次
-        separator = [["" for _ in rows[0]]]
-        ws.insert_rows(separator + rows, row=2, value_input_option="USER_ENTERED")
+        # 新数据置顶：空行追加在本批数据后面，视觉上区分每次抓取批次
+        separator = [["" ] * len(rows[0])]
+        ws.insert_rows(rows + separator, row=2, value_input_option="USER_ENTERED")
         print(f"✅ 成功写入 {len(articles)} 篇报告（已置顶）")
     except Exception as e:
         print(f"❌ gspread 写入失败: {e}")
